@@ -2,15 +2,18 @@
 // Rules:
 // - Sum columns I,J,K,L (default) per row.
 // - If column I is "A" or "F" => absent => 0 meals for that row.
-// - If "PB" appears (case-insensitive) => 0 meals for that row.
+// - If "PB" appears anywhere in meal columns (case-insensitive) => 0 meals for that row.
 // - If person has only PB days across all rows => show "PB" instead of a number.
-// - Names matched case-insensitively and accent-insensitively.
+// - Names matched case-insensitively, accent-insensitively, and ignoring special characters like '*'.
 
 const fileInput = document.getElementById("fileInput");
 const runBtn = document.getElementById("runBtn");
 const statusEl = document.getElementById("status");
 const resultsBody = document.querySelector("#resultsTable tbody");
+
 const downloadCsvBtn = document.getElementById("downloadCsvBtn");
+const downloadXlsxBtn = document.getElementById("downloadXlsxBtn");
+
 const searchInput = document.getElementById("search");
 const sortSelect = document.getElementById("sort");
 
@@ -18,11 +21,12 @@ const nameColInput = document.getElementById("nameCol");
 const mealColsInput = document.getElementById("mealCols");
 const firstRowInput = document.getElementById("firstRow");
 
-let latestRows = []; // for rendering + CSV
+let latestRows = []; // for rendering + exports
 
 fileInput.addEventListener("change", () => {
   runBtn.disabled = !(fileInput.files && fileInput.files.length);
   downloadCsvBtn.disabled = true;
+  downloadXlsxBtn.disabled = true;
   searchInput.disabled = true;
   sortSelect.disabled = true;
   resultsBody.innerHTML = "";
@@ -37,9 +41,9 @@ runBtn.addEventListener("click", async () => {
 
     const nameColLetter = (nameColInput.value || "E").trim().toUpperCase();
     const mealColLetters = (mealColsInput.value || "I,J,K,L")
-      .split(",")
-      .map(s => s.trim().toUpperCase())
-      .filter(Boolean);
+        .split(",")
+        .map(s => s.trim().toUpperCase())
+        .filter(Boolean);
 
     const forcedFirstRow = parseInt(firstRowInput.value || "0", 10) || 0;
 
@@ -57,24 +61,27 @@ runBtn.addEventListener("click", async () => {
         const ws = wb.Sheets[sheetName];
         if (!ws) continue;
 
-        // 2D array, preserving empty cells as null
+        // 2D array; empty cells become null
         const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false });
-
         if (!rows || !rows.length) continue;
 
-        const startRow = forcedFirstRow > 0 ? (forcedFirstRow - 1) : autoDetectFirstDataRow(rows, nameColIdx, mealColIdxs);
+        const startRow = forcedFirstRow > 0
+            ? (forcedFirstRow - 1)
+            : autoDetectFirstDataRow(rows, nameColIdx, mealColIdxs);
 
         for (let r = startRow; r < rows.length; r++) {
           const row = rows[r] || [];
           const rawName = row[nameColIdx];
 
+          // Cleaned name for DISPLAY (removes '*' etc, but keeps accents)
           const displayName = normalizeDisplayName(rawName);
           if (!displayName) continue;
 
+          // Key ignores accents, case, and special chars like '*'
           const key = normalizeKey(displayName);
 
           // Determine row status & meals
-          const colI = row[mealColIdxs[0]]; // first in list; default is I
+          const colI = row[mealColIdxs[0]]; // first meal col (default I)
           const absent = isAbsent(colI);
           const pbDay = isPB(colI) || anyPB(row, mealColIdxs);
 
@@ -88,7 +95,7 @@ runBtn.addEventListener("click", async () => {
 
           if (!accumulator.has(key)) {
             accumulator.set(key, {
-              name: displayName,   // first seen version
+              name: displayName,   // CLEANED display name stored
               meals: 0,
               pbDays: 0,
               mealDays: 0,
@@ -96,6 +103,10 @@ runBtn.addEventListener("click", async () => {
               everNumericMeals: false,
               everPB: false
             });
+          } else {
+            // Prefer a "better" display name if we find one later
+            const stExisting = accumulator.get(key);
+            stExisting.name = chooseBetterDisplayName(stExisting.name, displayName);
           }
 
           const st = accumulator.get(key);
@@ -104,11 +115,11 @@ runBtn.addEventListener("click", async () => {
           if (pbDay) {
             st.pbDays += 1;
             st.everPB = true;
-            continue; // PB day is always 0 meals
+            continue; // PB day always counts as 0 meals
           }
 
           if (absent) {
-            continue; // absent day is 0 meals
+            continue; // A/F day counts as 0 meals
           }
 
           st.meals += rowMeals;
@@ -122,23 +133,24 @@ runBtn.addEventListener("click", async () => {
     }
 
     // Build report rows
-    latestRows = Array.from(accumulator.values())
-      .map(st => {
-        const onlyPB = st.everPB && !st.everNumericMeals && st.meals === 0;
-        return {
-          name: st.name,
-          total: onlyPB ? "PB" : st.meals,
-          mealsNumeric: onlyPB ? null : st.meals,
-          pbDays: st.pbDays,
-          mealDays: st.mealDays,
-          rows: st.rows
-        };
-      });
+    latestRows = Array.from(accumulator.values()).map(st => {
+      const onlyPB = st.everPB && !st.everNumericMeals && st.meals === 0;
+      return {
+        name: st.name,
+        total: onlyPB ? "PB" : st.meals,
+        mealsNumeric: onlyPB ? null : st.meals,
+        pbDays: st.pbDays,
+        mealDays: st.mealDays,
+        rows: st.rows
+      };
+    });
 
-    // enable UI
-    downloadCsvBtn.disabled = latestRows.length === 0;
-    searchInput.disabled = latestRows.length === 0;
-    sortSelect.disabled = latestRows.length === 0;
+    // Enable UI
+    const hasResults = latestRows.length > 0;
+    downloadCsvBtn.disabled = !hasResults;
+    downloadXlsxBtn.disabled = !hasResults;
+    searchInput.disabled = !hasResults;
+    sortSelect.disabled = !hasResults;
 
     render();
     status(`Done. Processed ${files.length} file(s). People found: ${latestRows.length}.`);
@@ -151,6 +163,7 @@ runBtn.addEventListener("click", async () => {
 searchInput.addEventListener("input", render);
 sortSelect.addEventListener("change", render);
 
+// CSV export
 downloadCsvBtn.addEventListener("click", () => {
   if (!latestRows.length) return;
   const csv = toCSV(latestRows);
@@ -164,6 +177,34 @@ downloadCsvBtn.addEventListener("click", () => {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+});
+
+// Excel (.xlsx) export
+downloadXlsxBtn.addEventListener("click", () => {
+  if (!latestRows.length) return;
+
+  const data = latestRows.map(r => ({
+    Name: r.name,
+    Total: r.total,          // number or "PB"
+    "PB days": r.pbDays,
+    "Meal days": r.mealDays,
+    "Rows counted": r.rows
+  }));
+
+  const ws = XLSX.utils.json_to_sheet(data, { skipHeader: false });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Monthly Report");
+
+  // Basic column widths
+  ws["!cols"] = [
+    { wch: 35 }, // Name
+    { wch: 10 }, // Total
+    { wch: 10 }, // PB days
+    { wch: 10 }, // Meal days
+    { wch: 14 }  // Rows counted
+  ];
+
+  XLSX.writeFile(wb, "monthly_meals_report.xlsx");
 });
 
 // ---------------- Helpers ----------------
@@ -188,21 +229,57 @@ function colLetterToIndex(letter) {
 function normalizeDisplayName(v) {
   if (v === null || v === undefined) return "";
   if (typeof v === "number") return ""; // names shouldn't be numeric
-  const s = String(v).trim();
-  // avoid common header junk
+  let s = String(v).trim();
   if (!s) return "";
+
+  // Normalize unicode (keeps accents), remove special chars like '*' but keep letters/numbers/spaces
+  s = s.normalize("NFKC")
+      .replace(/[^\p{L}\p{N}\s]/gu, "") // strips *, punctuation, etc (keeps accented letters)
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!s) return "";
+
+  // avoid common header junk (compare using key-normalized)
   const sKey = normalizeKey(s);
   if (["familias", "families", "family", "nome", "name"].includes(sKey)) return "";
+
   return s;
 }
 
+// Key normalization: ignores accents + case + special characters (used ONLY for merging/searching)
 function normalizeKey(s) {
   return String(s)
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // remove accents/diacritics
-    .replace(/\s+/g, " ");          // collapse spaces
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "") // remove accents/diacritics
+      .replace(/[^a-z0-9\s]/g, "")     // remove special characters like * (keeps letters/numbers/spaces)
+      .replace(/\s+/g, " ");           // collapse spaces
+}
+
+// If we see the same person written differently, pick the nicer display name:
+// - prefer the one with diacritics (José vs Jose)
+// - otherwise prefer longer (often includes middle/last name)
+function chooseBetterDisplayName(current, candidate) {
+  const cur = String(current || "").trim();
+  const cand = String(candidate || "").trim();
+  if (!cur) return cand;
+  if (!cand) return cur;
+
+  const curHasDia = hasDiacritics(cur);
+  const candHasDia = hasDiacritics(cand);
+
+  if (!curHasDia && candHasDia) return cand;
+  if (curHasDia && !candHasDia) return cur;
+
+  if (cand.length > cur.length) return cand;
+  return cur;
+}
+
+function hasDiacritics(str) {
+  // if NFD adds combining marks, it has diacritics
+  return str.normalize("NFD").some(ch => /[\u0300-\u036f]/.test(ch));
 }
 
 function isAbsent(v) {
@@ -229,12 +306,14 @@ function sumNumeric(row, idxs) {
   for (const i of idxs) {
     const v = row[i];
     if (v === null || v === undefined) continue;
+
     if (typeof v === "number" && Number.isFinite(v)) {
       total += v;
       continue;
     }
+
     // handle numeric strings like "10" or " 2 "
-    const s = String(v).trim().replace(",", "."); // tolerate commas
+    const s = String(v).trim().replace(",", ".");
     const num = Number(s);
     if (Number.isFinite(num)) total += num;
   }
@@ -242,15 +321,11 @@ function sumNumeric(row, idxs) {
 }
 
 function autoDetectFirstDataRow(rows, nameColIdx, mealColIdxs) {
-  // Find first row where:
-  // - name cell looks like a real name string
-  // - AND row has something relevant in meal cols (number or A/F/PB or blank but below header)
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r] || [];
     const name = normalizeDisplayName(row[nameColIdx]);
     if (!name) continue;
 
-    // require at least one of the meal cells to be non-null OR it's clearly below headers
     let interesting = false;
     for (const c of mealColIdxs) {
       const v = row[c];
@@ -260,9 +335,7 @@ function autoDetectFirstDataRow(rows, nameColIdx, mealColIdxs) {
     }
 
     if (interesting) return r;
-
-    // If no meal cols filled, still accept if name looks real and we're beyond top banner area
-    if (r > 3) return r;
+    if (r > 3) return r; // usually below header banner
   }
   return 0;
 }
@@ -280,7 +353,7 @@ function render() {
     if (sortMode === "nameAsc") return normalizeKey(a.name).localeCompare(normalizeKey(b.name));
     if (sortMode === "nameDesc") return normalizeKey(b.name).localeCompare(normalizeKey(a.name));
 
-    // meals sort: PB treated as -1 (or push to bottom/top)
+    // meals sort: PB treated as -1
     const am = a.mealsNumeric === null ? -1 : a.mealsNumeric;
     const bm = b.mealsNumeric === null ? -1 : b.mealsNumeric;
 
@@ -328,9 +401,9 @@ function csvCell(v) {
 
 function escapeHTML(s) {
   return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
 }

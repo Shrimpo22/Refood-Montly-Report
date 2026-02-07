@@ -11,79 +11,80 @@
 </head>
 
 <body>
-  <header>
-    <h1>Monthly Meals Counter</h1>
-    <p>Upload all weekly/day Excel files for the month. The app will total meals per person across all tabs.</p>
-  </header>
+<header>
+  <h1>Monthly Meals Counter</h1>
+  <p>Upload all Excel files for the month. The app totals meals per person across all tabs.</p>
+</header>
 
-  <main>
-    <section class="card">
-      <h2>Upload files</h2>
-      <input id="fileInput" type="file" multiple accept=".xlsx,.xls" />
-      <div class="row">
-        <button id="runBtn" disabled>Process</button>
-        <button id="downloadCsvBtn" disabled>Download CSV</button>
-      </div>
+<main>
+  <section class="card">
+    <h2>Upload files</h2>
+    <input id="fileInput" type="file" multiple accept=".xlsx,.xls" />
+    <div class="row">
+      <button id="runBtn" disabled>Process</button>
+      <button id="downloadXlsxBtn" disabled>Download Excel (.xlsx)</button>
+      <button id="downloadCsvBtn" disabled>Download CSV</button>
+    </div>
 
-      <details class="advanced">
-        <summary>Advanced settings</summary>
-        <div class="grid">
-          <label>
-            Name column (default E)
-            <input id="nameCol" value="E" />
-          </label>
-          <label>
-            Meal columns (default I-L)
-            <input id="mealCols" value="I,J,K,L" />
-          </label>
-          <label>
-            First data row (0 = auto-detect)
-            <input id="firstRow" type="number" value="0" min="0" />
-          </label>
-        </div>
-        <p class="hint">
-          Default assumes names are in column <b>E</b> and meals/extras are in columns <b>I-L</b>.
-          If your templates vary, adjust these.
-        </p>
-      </details>
-
-      <div id="status" class="status"></div>
-    </section>
-
-    <section class="card">
-      <h2>Report</h2>
-      <div class="row">
-        <input id="search" placeholder="Search name…" disabled />
-        <select id="sort" disabled>
-          <option value="nameAsc">Sort: Name A→Z</option>
-          <option value="nameDesc">Sort: Name Z→A</option>
-          <option value="mealsDesc">Sort: Meals High→Low</option>
-          <option value="mealsAsc">Sort: Meals Low→High</option>
-        </select>
-      </div>
-
-      <div class="tableWrap">
-        <table id="resultsTable">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Total</th>
-              <th class="small">PB days</th>
-              <th class="small">Meal days</th>
-              <th class="small">Rows counted</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+    <details class="advanced">
+      <summary>Advanced settings</summary>
+      <div class="grid">
+        <label>
+          Name column (default E)
+          <input id="nameCol" value="E" />
+        </label>
+        <label>
+          Meal columns (default I-L)
+          <input id="mealCols" value="I,J,K,L" />
+        </label>
+        <label>
+          First data row (0 = auto-detect)
+          <input id="firstRow" type="number" value="0" min="0" />
+        </label>
       </div>
       <p class="hint">
-        <b>Total</b> shows a number, or <b>PB</b> if the person only had PB for the entire month.
+        Default assumes names are in column <b>E</b> and meals/extras are in columns <b>I-L</b>.
       </p>
-    </section>
-  </main>
+    </details>
 
-  <footer>
-    <small>Runs locally in your browser. Nothing is uploaded to a server.</small>
-  </footer>
+    <div id="status" class="status"></div>
+  </section>
+
+  <section class="card">
+    <h2>Report</h2>
+    <div class="row">
+      <input id="search" placeholder="Search name…" disabled />
+      <select id="sort" disabled>
+        <option value="nameAsc">Sort: Name A→Z</option>
+        <option value="nameDesc">Sort: Name Z→A</option>
+        <option value="mealsDesc">Sort: Meals High→Low</option>
+        <option value="mealsAsc">Sort: Meals Low→High</option>
+      </select>
+    </div>
+
+    <div class="tableWrap">
+      <table id="resultsTable">
+        <thead>
+        <tr>
+          <th>Name</th>
+          <th>Total</th>
+          <th class="small">PB days</th>
+          <th class="small">Meal days</th>
+          <th class="small">Rows counted</th>
+        </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <p class="hint">
+      <b>Total</b> shows a number, or <b>PB</b> if the person only had PB for the entire month.
+    </p>
+  </section>
+</main>
+
+<footer>
+  <small>Runs locally in your browser. Nothing is uploaded to a server.</small>
+</footer>
 </body>
 </html>
