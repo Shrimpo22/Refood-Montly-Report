@@ -1,13 +1,11 @@
-// Monthly Meals Counter
-// Rules:
-// - Sum columns I,J,K,L (default) per row.
-// - If column I is "A" or "F" => absent => 0 meals for that row.
-// - If "PB" appears anywhere in meal columns (case-insensitive) => 0 meals for that row.
-// - If person has only PB days across all rows => show "PB" instead of a number.
-// - Names matched case-insensitively, accent-insensitively, and ignoring special characters like '*'.
+// Monthly Meals Counter + Fill Month Report Template
 
 const fileInput = document.getElementById("fileInput");
+const reportInput = document.getElementById("reportInput");
+
 const runBtn = document.getElementById("runBtn");
+const fillReportBtn = document.getElementById("fillReportBtn");
+
 const statusEl = document.getElementById("status");
 const resultsBody = document.querySelector("#resultsTable tbody");
 
@@ -22,20 +20,40 @@ const mealColsInput = document.getElementById("mealCols");
 const firstRowInput = document.getElementById("firstRow");
 
 let latestRows = []; // for rendering + exports
+let latestMap = new Map(); // key -> { name, total } (total is number or "PB")
+
+let reportFile = null;
 
 fileInput.addEventListener("change", () => {
   runBtn.disabled = !(fileInput.files && fileInput.files.length);
+
   downloadCsvBtn.disabled = true;
   downloadXlsxBtn.disabled = true;
   searchInput.disabled = true;
   sortSelect.disabled = true;
+
+  latestRows = [];
+  latestMap = new Map();
   resultsBody.innerHTML = "";
   status("");
+
+  updateFillButtonState();
 });
+
+reportInput.addEventListener("change", () => {
+  reportFile = (reportInput.files && reportInput.files[0]) ? reportInput.files[0] : null;
+  updateFillButtonState();
+});
+
+function updateFillButtonState() {
+  const hasMeals = latestRows.length > 0;
+  const hasReport = !!reportFile;
+  fillReportBtn.disabled = !(hasMeals && hasReport);
+}
 
 runBtn.addEventListener("click", async () => {
   try {
-    status("Reading files…");
+    status("Reading meal files…");
     const files = Array.from(fileInput.files || []);
     if (!files.length) return;
 
@@ -50,7 +68,7 @@ runBtn.addEventListener("click", async () => {
     const nameColIdx = colLetterToIndex(nameColLetter);
     const mealColIdxs = mealColLetters.map(colLetterToIndex);
 
-    const accumulator = new Map(); // key: normalizedName => stats
+    const accumulator = new Map(); // key -> stats
 
     for (const f of files) {
       status(`Parsing: ${f.name}`);
@@ -61,7 +79,6 @@ runBtn.addEventListener("click", async () => {
         const ws = wb.Sheets[sheetName];
         if (!ws) continue;
 
-        // 2D array; empty cells become null
         const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, blankrows: false });
         if (!rows || !rows.length) continue;
 
@@ -73,15 +90,12 @@ runBtn.addEventListener("click", async () => {
           const row = rows[r] || [];
           const rawName = row[nameColIdx];
 
-          // Cleaned name for DISPLAY (removes '*' etc, but keeps accents)
           const displayName = normalizeDisplayName(rawName);
           if (!displayName) continue;
 
-          // Key ignores accents, case, and special chars like '*'
           const key = normalizeKey(displayName);
 
-          // Determine row status & meals
-          const colI = row[mealColIdxs[0]]; // first meal col (default I)
+          const colI = row[mealColIdxs[0]];
           const absent = isAbsent(colI);
           const pbDay = isPB(colI) || anyPB(row, mealColIdxs);
 
@@ -95,7 +109,7 @@ runBtn.addEventListener("click", async () => {
 
           if (!accumulator.has(key)) {
             accumulator.set(key, {
-              name: displayName,   // CLEANED display name stored
+              name: displayName,
               meals: 0,
               pbDays: 0,
               mealDays: 0,
@@ -104,7 +118,6 @@ runBtn.addEventListener("click", async () => {
               everPB: false
             });
           } else {
-            // Prefer a "better" display name if we find one later
             const stExisting = accumulator.get(key);
             stExisting.name = chooseBetterDisplayName(stExisting.name, displayName);
           }
@@ -115,12 +128,9 @@ runBtn.addEventListener("click", async () => {
           if (pbDay) {
             st.pbDays += 1;
             st.everPB = true;
-            continue; // PB day always counts as 0 meals
+            continue;
           }
-
-          if (absent) {
-            continue; // A/F day counts as 0 meals
-          }
+          if (absent) continue;
 
           st.meals += rowMeals;
 
@@ -132,7 +142,6 @@ runBtn.addEventListener("click", async () => {
       }
     }
 
-    // Build report rows
     latestRows = Array.from(accumulator.values()).map(st => {
       const onlyPB = st.everPB && !st.everNumericMeals && st.meals === 0;
       return {
@@ -145,7 +154,11 @@ runBtn.addEventListener("click", async () => {
       };
     });
 
-    // Enable UI
+    // Build lookup map for filling template
+    latestMap = new Map(
+        latestRows.map(r => [normalizeKey(r.name), { name: r.name, total: r.total }])
+    );
+
     const hasResults = latestRows.length > 0;
     downloadCsvBtn.disabled = !hasResults;
     downloadXlsxBtn.disabled = !hasResults;
@@ -153,17 +166,87 @@ runBtn.addEventListener("click", async () => {
     sortSelect.disabled = !hasResults;
 
     render();
-    status(`Done. Processed ${files.length} file(s). People found: ${latestRows.length}.`);
+    status(`Done. Processed ${files.length} meal file(s). People found: ${latestRows.length}.`);
+
+    updateFillButtonState();
   } catch (err) {
     console.error(err);
     status(`Error: ${err?.message || err}`);
   }
 });
 
+fillReportBtn.addEventListener("click", async () => {
+  if (!reportFile || latestRows.length === 0) return;
+
+  try {
+    status(`Filling month report: ${reportFile.name}`);
+    const buf = await reportFile.arrayBuffer();
+    const wb = XLSX.read(buf, { type: "array" });
+
+    const targetSheetName = findBeneficiariosSheet(wb);
+    if (!targetSheetName) {
+      status(`Error: couldn't find a "Beneficiários" sheet in the report.`);
+      return;
+    }
+
+    const ws = wb.Sheets[targetSheetName];
+
+    const NAME_COL = "C";
+    const FAMILY_COL = "D";
+    const MEALS_COL = "Q";
+
+    const headerRow = findHeaderRow(ws, NAME_COL);
+    const startRow = headerRow ? (headerRow + 1) : 8; // fallback to 8
+
+    // Collect existing names in template and rewrite Q
+    const existingKeys = new Set();
+    let lastRow = startRow;
+
+    for (let row = startRow; ; row++) {
+      const nameCellAddr = `${NAME_COL}${row}`;
+      const nameCell = ws[nameCellAddr];
+      const rawName = nameCell ? nameCell.v : null;
+
+      const disp = normalizeDisplayName(rawName);
+      if (!disp) break; // stop at first empty name row (template uses contiguous list)
+
+      const key = normalizeKey(disp);
+      existingKeys.add(key);
+      lastRow = row;
+
+      const match = latestMap.get(key);
+      const newValue = match ? match.total : 0;
+
+      setCell(ws, `${MEALS_COL}${row}`, newValue);
+    }
+
+    // Append missing people
+    const missing = [];
+    for (const [key, info] of latestMap.entries()) {
+      if (!existingKeys.has(key)) missing.push(info);
+    }
+
+    let writeRow = lastRow + 1;
+    for (const info of missing.sort((a, b) => normalizeKey(a.name).localeCompare(normalizeKey(b.name)))) {
+      setCell(ws, `${NAME_COL}${writeRow}`, info.name);
+      setCell(ws, `${FAMILY_COL}${writeRow}`, 1);
+      setCell(ws, `${MEALS_COL}${writeRow}`, info.total);
+      writeRow++;
+    }
+
+    XLSX.writeFile(wb, `FILLED_${reportFile.name.replace(/\.(xlsx|xls)$/i, "")}.xlsx`);
+    status(`Filled report downloaded. Updated ${targetSheetName}: Q column rewritten, missing people appended.`);
+  } catch (err) {
+    console.error(err);
+    status(`Error filling report: ${err?.message || err}`);
+  }
+});
+
+// ----------- Exports you already had -----------
+
 searchInput.addEventListener("input", render);
 sortSelect.addEventListener("change", render);
 
-// CSV export
 downloadCsvBtn.addEventListener("click", () => {
   if (!latestRows.length) return;
   const csv = toCSV(latestRows);
@@ -179,13 +262,12 @@ downloadCsvBtn.addEventListener("click", () => {
   URL.revokeObjectURL(url);
 });
 
-// Excel (.xlsx) export
 downloadXlsxBtn.addEventListener("click", () => {
   if (!latestRows.length) return;
 
   const data = latestRows.map(r => ({
     Name: r.name,
-    Total: r.total,          // number or "PB"
+    Total: r.total,
     "PB days": r.pbDays,
     "Meal days": r.mealDays,
     "Rows counted": r.rows
@@ -195,13 +277,12 @@ downloadXlsxBtn.addEventListener("click", () => {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Monthly Report");
 
-  // Basic column widths
   ws["!cols"] = [
-    { wch: 35 }, // Name
-    { wch: 10 }, // Total
-    { wch: 10 }, // PB days
-    { wch: 10 }, // Meal days
-    { wch: 14 }  // Rows counted
+    { wch: 35 },
+    { wch: 10 },
+    { wch: 10 },
+    { wch: 10 },
+    { wch: 14 }
   ];
 
   XLSX.writeFile(wb, "monthly_meals_report.xlsx");
@@ -214,7 +295,6 @@ function status(msg) {
 }
 
 function colLetterToIndex(letter) {
-  // A => 0, B => 1, ..., Z => 25, AA => 26
   let s = (letter || "").toUpperCase().trim();
   if (!s) return 0;
   let n = 0;
@@ -228,39 +308,33 @@ function colLetterToIndex(letter) {
 
 function normalizeDisplayName(v) {
   if (v === null || v === undefined) return "";
-  if (typeof v === "number") return ""; // names shouldn't be numeric
+  if (typeof v === "number") return "";
   let s = String(v).trim();
   if (!s) return "";
 
-  // Normalize unicode (keeps accents), remove special chars like '*' but keep letters/numbers/spaces
+  // keep accents, remove punctuation like **, etc (modern browsers)
   s = s.normalize("NFKC")
-      .replace(/[^\p{L}\p{N}\s]/gu, "") // strips *, punctuation, etc (keeps accented letters)
+      .replace(/[^\p{L}\p{N}\s]/gu, "")
       .replace(/\s+/g, " ")
       .trim();
 
   if (!s) return "";
 
-  // avoid common header junk (compare using key-normalized)
   const sKey = normalizeKey(s);
   if (["familias", "families", "family", "nome", "name"].includes(sKey)) return "";
-
   return s;
 }
 
-// Key normalization: ignores accents + case + special characters (used ONLY for merging/searching)
 function normalizeKey(s) {
   return String(s)
       .trim()
       .toLowerCase()
       .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "") // remove accents/diacritics
-      .replace(/[^a-z0-9\s]/g, "")     // remove special characters like * (keeps letters/numbers/spaces)
-      .replace(/\s+/g, " ");           // collapse spaces
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9\s]/g, "")
+      .replace(/\s+/g, " ");
 }
 
-// If we see the same person written differently, pick the nicer display name:
-// - prefer the one with diacritics (José vs Jose)
-// - otherwise prefer longer (often includes middle/last name)
 function chooseBetterDisplayName(current, candidate) {
   const cur = String(current || "").trim();
   const cand = String(candidate || "").trim();
@@ -311,7 +385,6 @@ function sumNumeric(row, idxs) {
       continue;
     }
 
-    // handle numeric strings like "10" or " 2 "
     const s = String(v).trim().replace(",", ".");
     const num = Number(s);
     if (Number.isFinite(num)) total += num;
@@ -334,7 +407,7 @@ function autoDetectFirstDataRow(rows, nameColIdx, mealColIdxs) {
     }
 
     if (interesting) return r;
-    if (r > 3) return r; // usually below header banner
+    if (r > 3) return r;
   }
   return 0;
 }
@@ -343,16 +416,13 @@ function render() {
   const q = normalizeKey(searchInput.value || "");
   let rows = latestRows.slice();
 
-  if (q) {
-    rows = rows.filter(r => normalizeKey(r.name).includes(q));
-  }
+  if (q) rows = rows.filter(r => normalizeKey(r.name).includes(q));
 
   const sortMode = sortSelect.value;
   rows.sort((a, b) => {
     if (sortMode === "nameAsc") return normalizeKey(a.name).localeCompare(normalizeKey(b.name));
     if (sortMode === "nameDesc") return normalizeKey(b.name).localeCompare(normalizeKey(a.name));
 
-    // meals sort: PB treated as -1
     const am = a.mealsNumeric === null ? -1 : a.mealsNumeric;
     const bm = b.mealsNumeric === null ? -1 : b.mealsNumeric;
 
@@ -378,16 +448,14 @@ function render() {
 function toCSV(rows) {
   const header = ["Name", "Total", "PB days", "Meal days", "Rows counted"];
   const lines = [header.join(",")];
-
   for (const r of rows) {
-    const vals = [
+    lines.push([
       csvCell(r.name),
       csvCell(String(r.total)),
       r.pbDays,
       r.mealDays,
       r.rows
-    ];
-    lines.push(vals.join(","));
+    ].join(","));
   }
   return lines.join("\n");
 }
@@ -405,4 +473,47 @@ function escapeHTML(s) {
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#039;");
+}
+
+// ----------- Template-filling helpers -----------
+
+function findBeneficiariosSheet(wb) {
+  // Prefer sheets whose name contains "benef"
+  const names = wb.SheetNames || [];
+  for (const n of names) {
+    const k = normalizeKey(n);
+    if (k.includes("benef")) return n;
+  }
+  // Fallback: try find a sheet that has "Nome Beneficiário" in column C
+  for (const n of names) {
+    const ws = wb.Sheets[n];
+    if (ws && findHeaderRow(ws, "C")) return n;
+  }
+  return null;
+}
+
+function findHeaderRow(ws, nameColLetter) {
+  // scan first 60 rows in column C for "Nome Beneficiário" (normalized)
+  for (let r = 1; r <= 60; r++) {
+    const addr = `${nameColLetter}${r}`;
+    const cell = ws[addr];
+    const v = cell ? cell.v : null;
+    const k = normalizeKey(v || "");
+    if (k.includes("nome beneficiario")) return r;
+  }
+  return null;
+}
+
+function setCell(ws, addr, value) {
+  // set value while ensuring cell exists
+  const t = (typeof value === "number") ? "n" : "s";
+  ws[addr] = { t, v: value };
+  // expand range
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1:A1");
+  const { c, r } = XLSX.utils.decode_cell(addr);
+  if (r < range.s.r) range.s.r = r;
+  if (c < range.s.c) range.s.c = c;
+  if (r > range.e.r) range.e.r = r;
+  if (c > range.e.c) range.e.c = c;
+  ws["!ref"] = XLSX.utils.encode_range(range);
 }

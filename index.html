@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Monthly Meals Counter</title>
   <link rel="stylesheet" href="style.css" />
-  <!-- SheetJS (XLSX) via CDN -->
   <script defer src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script defer src="app.js"></script>
 </head>
@@ -18,7 +17,7 @@
 
 <main>
   <section class="card">
-    <h2>Upload files</h2>
+    <h2>Upload meal files</h2>
     <input id="fileInput" type="file" multiple accept=".xlsx,.xls" />
     <div class="row">
       <button id="runBtn" disabled>Process</button>
@@ -48,6 +47,22 @@
     </details>
 
     <div id="status" class="status"></div>
+  </section>
+
+  <section class="card">
+    <h2>Fill month report template</h2>
+    <p class="hint">
+      Upload your month report Excel (the one with the <b>Modelo Beneficiários</b> tab). We will update column <b>Q</b> (Nº Refeições).
+    </p>
+
+    <input id="reportInput" type="file" accept=".xlsx,.xls" />
+
+    <div class="row">
+      <button id="fillReportBtn" disabled>Download filled month report (.xlsx)</button>
+    </div>
+    <div class="hint">
+      Note: exporting with SheetJS may not preserve every Excel style perfectly, but values and structure will be correct.
+    </div>
   </section>
 
   <section class="card">
