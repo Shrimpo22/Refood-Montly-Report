@@ -278,8 +278,7 @@ function chooseBetterDisplayName(current, candidate) {
 }
 
 function hasDiacritics(str) {
-  // if NFD adds combining marks, it has diacritics
-  return str.normalize("NFD").some(ch => /[\u0300-\u036f]/.test(ch));
+  return /[\u0300-\u036f]/.test(str.normalize("NFD"));
 }
 
 function isAbsent(v) {
